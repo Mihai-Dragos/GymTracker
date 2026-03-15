@@ -1,0 +1,397 @@
+import React, { useState, useEffect } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, onSnapshot } from 'firebase/firestore';
+import { Activity, Calendar, Check, Save, ChevronDown, ChevronUp, Clock, Plus } from 'lucide-react';
+
+// --- FIREBASE INITIALIZATION ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'basic-fit-tracker';
+
+// --- DATA TEMPLATE ---
+const getInitialTemplate = (weekDate) => ({
+  weekOf: weekDate,
+  workouts: {
+    w1: {
+      id: 'w1',
+      title: 'Workout 1: Upper Body A (Chest \\& Back)',
+      runCompleted: false,
+      supersets: [
+        {
+          title: 'Superset 1 (No rest between A \\& B. Rest 60s after B)',
+          exercises: [
+            { name: '1A. Chest Press', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '1B. Seated Cable Row', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        },
+        {
+          title: 'Superset 2',
+          exercises: [
+            { name: '2A. Lat Pulldown', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '2B. Incline DB Press', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        }
+      ]
+    },
+    w2: {
+      id: 'w2',
+      title: 'Workout 2: Lower Body A (Quads \\& Core)',
+      runCompleted: false,
+      supersets: [
+        {
+          title: 'Superset 1',
+          exercises: [
+            { name: '1A. Leg Press', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '1B. Lying Leg Curl', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        },
+        {
+          title: 'Superset 2',
+          exercises: [
+            { name: '2A. Leg Extension', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '2B. Plank (Seconds)', type: 'time', sets: [{ t: '' }, { t: '' }, { t: '' }] }
+          ]
+        }
+      ]
+    },
+    w3: {
+      id: 'w3',
+      title: 'Workout 3: Upper Body B (Shoulders \\& Arms)',
+      runCompleted: false,
+      supersets: [
+        {
+          title: 'Superset 1',
+          exercises: [
+            { name: '1A. Shoulder Press', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '1B. Assisted Pull-Up', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        },
+        {
+          title: 'Superset 2',
+          exercises: [
+            { name: '2A. Cable Tricep Pushdown', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '2B. Cable Bicep Curl', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        }
+      ]
+    },
+    w4: {
+      id: 'w4',
+      title: 'Workout 4: Lower Body B (Glutes \\& Hams)',
+      runCompleted: false,
+      supersets: [
+        {
+          title: 'Straight Set (Rest 60s between sets)',
+          exercises: [
+            { name: '1. DB RDLs', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        },
+        {
+          title: 'Superset',
+          exercises: [
+            { name: '2A. Seated Leg Curl', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
+            { name: '2B. Leg Press Calf Raise', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        },
+        {
+          title: 'Finisher',
+          exercises: [
+            { name: '3. Ab Crunch Machine', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
+          ]
+        }
+      ]
+    }
+  }
+});
+
+export default function App() {
+  const [user, setUser] = useState(null);
+  const [savedWeeks, setSavedWeeks] = useState({});
+  const [loadingWeeks, setLoadingWeeks] = useState(true);
+  
+  const [currentWeekId, setCurrentWeekId] = useState('');
+  const [localData, setLocalData] = useState(null);
+  const [dirty, setDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  
+  const [expandedWorkouts, setExpandedWorkouts] = useState({ w1: true, w2: false, w3: false, w4: false });
+
+  // 1. Auth Initialization
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (err) {
+        console.error("Auth Error:", err);
+      }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Fetch Data
+  useEffect(() => {
+    if (!user) return;
+    const weeksRef = collection(db, 'artifacts', appId, 'users', user.uid, 'weeks');
+    
+    const unsub = onSnapshot(weeksRef, (snapshot) => {
+      const data = {};
+      snapshot.forEach(doc => {
+        data[doc.id] = doc.data();
+      });
+      setSavedWeeks(data);
+      setLoadingWeeks(false);
+    }, (error) => {
+      console.error("Fetch error:", error);
+      setLoadingWeeks(false);
+    });
+    
+    return () => unsub();
+  }, [user]);
+
+  // 3. Auto-select or Auto-create initial week
+  useEffect(() => {
+    if (!user || loadingWeeks) return;
+    
+    // If no week selected, try to pick the latest or create a new one
+    if (!currentWeekId) {
+      if (Object.keys(savedWeeks).length > 0) {
+        // Select latest week
+        const latest = Object.keys(savedWeeks).sort().reverse()[0];
+        setCurrentWeekId(latest);
+        setLocalData(savedWeeks[latest]);
+      } else {
+        // Create first week
+        const today = new Date().toISOString().split('T')[0];
+        setCurrentWeekId(today);
+        setLocalData(getInitialTemplate(today));
+        setDirty(true);
+      }
+    }
+  }, [savedWeeks, user, loadingWeeks, currentWeekId]);
+
+  // 4. Auto-save Debounce
+  useEffect(() => {
+    if (!dirty || !user || !currentWeekId || !localData) return;
+    
+    const saveTimer = setTimeout(async () => {
+      setIsSaving(true);
+      try {
+        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'weeks', currentWeekId);
+        await setDoc(docRef, localData, { merge: true });
+        setDirty(false);
+      } catch (err) {
+        console.error("Error saving:", err);
+      }
+      setTimeout(() => setIsSaving(false), 500); // UI feel
+    }, 1000); // 1-second debounce
+    
+    return () => clearTimeout(saveTimer);
+  }, [localData, dirty, user, currentWeekId]);
+
+  // Handlers
+  const handleWeekChange = (e) => {
+    const val = e.target.value;
+    if (val === 'NEW') {
+      const defaultDate = new Date().toISOString().split('T')[0];
+      const newWeekStr = prompt("Enter Week Start Date (YYYY-MM-DD):", defaultDate);
+      if (newWeekStr) {
+        setCurrentWeekId(newWeekStr);
+        setLocalData(getInitialTemplate(newWeekStr));
+        setDirty(true);
+      }
+    } else {
+      setCurrentWeekId(val);
+      setLocalData(savedWeeks[val]);
+      setDirty(false);
+    }
+  };
+
+  const toggleWorkout = (wKey) => {
+    setExpandedWorkouts(prev => ({ ...prev, [wKey]: !prev[wKey] }));
+  };
+
+  const toggleRun = (wKey) => {
+    setLocalData(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.workouts[wKey].runCompleted = !next.workouts[wKey].runCompleted;
+      return next;
+    });
+    setDirty(true);
+  };
+
+  const updateSet = (wKey, sIndex, eIndex, setIndex, field, val) => {
+    setLocalData(prev => {
+      const next = JSON.parse(JSON.stringify(prev));
+      next.workouts[wKey].supersets[sIndex].exercises[eIndex].sets[setIndex][field] = val;
+      return next;
+    });
+    setDirty(true);
+  };
+
+  if (!user || loadingWeeks || !localData) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="animate-pulse flex flex-col items-center">
+          <Activity className="w-12 h-12 text-blue-500 mb-4" />
+          <h2 className="text-xl font-bold text-gray-700">Loading Tracker...</h2>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-100 text-gray-800 font-sans pb-12">
+      {/* Header */}
+      <header className="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-10">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Activity className="w-6 h-6" />
+            <h1 className="text-lg md:text-xl font-bold tracking-wide">Basic-Fit 30-Min Tracker</h1>
+          </div>
+          <div className="flex items-center gap-2 text-sm">
+            {isSaving ? (
+              <span className="flex items-center gap-1 opacity-80 bg-blue-700 px-2 py-1 rounded">
+                <Clock className="w-4 h-4 animate-spin" /> Saving
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 bg-blue-700 px-2 py-1 rounded">
+                <Check className="w-4 h-4" /> Saved
+              </span>
+            )}
+          </div>
+        </div>
+      </header>
+
+      <main className="max-w-3xl mx-auto p-4 md:mt-4">
+        {/* Week Selector */}
+        <div className="bg-white p-4 rounded-xl shadow-sm mb-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+              <Calendar className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500 font-medium uppercase tracking-wider">Week Of</p>
+              <div className="relative">
+                <select 
+                  value={currentWeekId} 
+                  onChange={handleWeekChange}
+                  className="appearance-none bg-transparent font-bold text-lg pr-8 focus:outline-none cursor-pointer border-b border-transparent hover:border-gray-300"
+                >
+                  {Object.keys(savedWeeks).sort().reverse().map(week => (
+                    <option key={week} value={week}>{week}</option>
+                  ))}
+                  <option value="NEW">+ Start New Week</option>
+                </select>
+                <ChevronDown className="w-4 h-4 absolute right-0 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Workouts */}
+        <div className="space-y-4">
+          {Object.entries(localData.workouts).map(([wKey, workout]) => (
+            <div key={wKey} className="bg-white rounded-xl shadow-sm overflow-hidden border border-gray-100">
+              {/* Workout Header (Accordion Toggle) */}
+              <button 
+                onClick={() => toggleWorkout(wKey)}
+                className="w-full text-left px-5 py-4 flex items-center justify-between bg-gray-50 hover:bg-gray-100 transition-colors"
+              >
+                <h2 className="font-bold text-gray-800">{workout.title}</h2>
+                {expandedWorkouts[wKey] ? <ChevronUp className="w-5 h-5 text-gray-400" /> : <ChevronDown className="w-5 h-5 text-gray-400" />}
+              </button>
+
+              {/* Workout Content */}
+              {expandedWorkouts[wKey] && (
+                <div className="p-5 border-t border-gray-100">
+                  
+                  {/* Run Checkbox */}
+                  <label className="flex items-center gap-3 p-3 bg-blue-50 border border-blue-100 rounded-lg cursor-pointer mb-6 hover:bg-blue-100 transition-colors">
+                    <div className="relative flex items-center justify-center">
+                      <input 
+                        type="checkbox" 
+                        checked={workout.runCompleted}
+                        onChange={() => toggleRun(wKey)}
+                        className="peer appearance-none w-6 h-6 border-2 border-blue-300 rounded bg-white checked:bg-blue-500 checked:border-blue-500 transition-all cursor-pointer"
+                      />
+                      <Check className="w-4 h-4 text-white absolute pointer-events-none opacity-0 peer-checked:opacity-100" />
+                    </div>
+                    <span className="font-semibold text-blue-900">30-Min Run Completed</span>
+                  </label>
+
+                  {/* Supersets / Sets */}
+                  <div className="space-y-6">
+                    {workout.supersets.map((superset, sIndex) => (
+                      <div key={sIndex} className="bg-gray-50 p-4 rounded-lg border border-gray-100">
+                        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4">
+                          {superset.title}
+                        </h3>
+                        
+                        <div className="space-y-5">
+                          {superset.exercises.map((exercise, eIndex) => (
+                            <div key={eIndex} className="border-l-2 border-blue-400 pl-3">
+                              <h4 className="font-semibold text-gray-800 mb-2">{exercise.name}</h4>
+                              
+                              <div className="flex flex-wrap gap-2">
+                                {exercise.sets.map((set, setIndex) => (
+                                  <div key={setIndex} className="flex flex-col bg-white border border-gray-200 p-2 rounded-md shadow-sm">
+                                    <span className="text-[10px] text-gray-400 font-bold mb-1 uppercase text-center">Set {setIndex + 1}</span>
+                                    
+                                    {exercise.type === 'time' ? (
+                                      <div className="flex items-center gap-1">
+                                        <input 
+                                          type="number" 
+                                          value={set.t} 
+                                          onChange={(e) => updateSet(wKey, sIndex, eIndex, setIndex, 't', e.target.value)}
+                                          placeholder="sec" 
+                                          className="w-14 text-center border-none bg-gray-50 rounded p-1 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                        <span className="text-xs text-gray-500 font-medium">s</span>
+                                      </div>
+                                    ) : (
+                                      <div className="flex items-center gap-1">
+                                        <input 
+                                          type="number" 
+                                          value={set.w} 
+                                          onChange={(e) => updateSet(wKey, sIndex, eIndex, setIndex, 'w', e.target.value)}
+                                          placeholder="kg" 
+                                          className="w-12 text-center border-none bg-gray-50 rounded p-1 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                        <span className="text-xs text-gray-400">×</span>
+                                        <input 
+                                          type="number" 
+                                          value={set.r} 
+                                          onChange={(e) => updateSet(wKey, sIndex, eIndex, setIndex, 'r', e.target.value)}
+                                          placeholder="reps" 
+                                          className="w-12 text-center border-none bg-gray-50 rounded p-1 text-sm font-semibold focus:ring-2 focus:ring-blue-500 outline-none"
+                                        />
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </main>
+    </div>
+  );
+}
