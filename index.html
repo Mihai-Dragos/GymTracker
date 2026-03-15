@@ -25,8 +25,8 @@
   <!-- Main Content -->
   <main id="app-root" class="max-w-3xl mx-auto p-4 md:mt-4">
     <div id="firebase-warning" class="hidden bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4 rounded-md shadow-sm" role="alert">
-      <p class="font-bold text-sm">Cloud Saving Disabled</p>
-      <p class="text-xs mt-1">You are running outside the Canvas without a Firebase API key. Your data will only be saved temporarily during this session. To enable saving, update the `fallbackConfig` inside the code with your Firebase credentials.</p>
+      <p class="font-bold text-sm">Using Local Browser Storage</p>
+      <p class="text-xs mt-1">Firebase is not configured. Your data is currently being saved to your browser's built-in local storage. It will remain here securely between sessions, but will not sync across your other devices. Update the `fallbackConfig` inside the code with your Firebase credentials to enable cross-device cloud saving.</p>
     </div>
     <div class="flex items-center justify-center h-64">
       <div class="animate-pulse flex flex-col items-center">
@@ -73,6 +73,7 @@
     let saveTimer = null;
     let isInitialLoad = true;
     
+    const LOCAL_STORAGE_KEY = 'basicFitTrackerData';
     let expandedWorkouts = { w1: true, w2: false, w3: false, w4: false };
 
     // --- DATA TEMPLATE ---
@@ -80,10 +81,10 @@
       weekOf: weekDate,
       workouts: {
         w1: {
-          id: 'w1', title: 'Workout 1: Upper Body A (Chest & Back)', runCompleted: false,
+          id: 'w1', title: 'Workout 1: Upper Body A (Chest \\& Back)', runCompleted: false,
           supersets: [
             {
-              title: 'Superset 1 (No rest between A & B. Rest 60s after B)',
+              title: 'Superset 1 (No rest between A \\& B. Rest 60s after B)',
               exercises: [
                 { name: '1A. Chest Press', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] },
                 { name: '1B. Seated Cable Row', type: 'weight_reps', sets: [{ w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }, { w: '', r: '' }] }
@@ -99,7 +100,7 @@
           ]
         },
         w2: {
-          id: 'w2', title: 'Workout 2: Lower Body A (Quads & Core)', runCompleted: false,
+          id: 'w2', title: 'Workout 2: Lower Body A (Quads \\& Core)', runCompleted: false,
           supersets: [
             {
               title: 'Superset 1',
@@ -118,7 +119,7 @@
           ]
         },
         w3: {
-          id: 'w3', title: 'Workout 3: Upper Body B (Shoulders & Arms)', runCompleted: false,
+          id: 'w3', title: 'Workout 3: Upper Body B (Shoulders \\& Arms)', runCompleted: false,
           supersets: [
             {
               title: 'Superset 1',
@@ -137,7 +138,7 @@
           ]
         },
         w4: {
-          id: 'w4', title: 'Workout 4: Lower Body B (Glutes & Hams)', runCompleted: false,
+          id: 'w4', title: 'Workout 4: Lower Body B (Glutes \\& Hams)', runCompleted: false,
           supersets: [
             {
               title: 'Straight Set (Rest 60s between sets)',
@@ -167,7 +168,7 @@
     async function initAuth() {
       if (!isFirebaseConfigured) {
         document.getElementById('firebase-warning').classList.remove('hidden');
-        setupMemoryOnlyMode();
+        setupLocalOnlyMode();
         return;
       }
 
@@ -193,7 +194,7 @@
 
     initAuth();
 
-    // --- DATA FETCHING ---
+    // --- DATA FETCHING (FIREBASE) ---
     function fetchData() {
       if (!currentUser || !isFirebaseConfigured) return;
       const weeksRef = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'weeks');
@@ -222,12 +223,35 @@
       });
     }
 
-    // --- MEMORY ONLY FALLBACK ---
-    function setupMemoryOnlyMode() {
+    // --- DATA FETCHING (LOCAL BROWSER STORAGE) ---
+    function setupLocalOnlyMode() {
       isInitialLoad = false;
-      const today = new Date().toISOString().split('T')[0];
-      currentWeekId = today;
-      localData = getInitialTemplate(today);
+      
+      // Try to load existing data from the browser
+      const storedData = localStorage.getItem(LOCAL_STORAGE_KEY);
+      if (storedData) {
+        try {
+          savedWeeks = JSON.parse(storedData);
+        } catch(e) {
+          savedWeeks = {};
+        }
+      }
+
+      const sortedWeeks = Object.keys(savedWeeks).sort().reverse();
+      
+      if (sortedWeeks.length > 0) {
+        // Load the most recent week
+        currentWeekId = sortedWeeks[0];
+        localData = JSON.parse(JSON.stringify(savedWeeks[currentWeekId]));
+      } else {
+        // First time ever opening the app locally
+        const today = new Date().toISOString().split('T')[0];
+        currentWeekId = today;
+        localData = getInitialTemplate(today);
+        savedWeeks[currentWeekId] = localData;
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(savedWeeks));
+      }
+      
       renderApp();
     }
 
@@ -250,11 +274,14 @@
         updateHeaderSaveState();
         
         if (!isFirebaseConfigured) {
-          // Fake saving delay for memory-only mode
+          // Save data into the browser's local storage instead of cloud
+          savedWeeks[currentWeekId] = localData;
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(savedWeeks));
+          
           setTimeout(() => {
             isSaving = false;
             updateHeaderSaveState();
-          }, 500);
+          }, 400); // Small UI delay so user sees "Saving..."
           return;
         }
 
@@ -271,7 +298,7 @@
       }, 1000);
     }
 
-    // --- EVENT DELEGATION (Input & Clicks) ---
+    // --- EVENT DELEGATION (Input \& Clicks) ---
     document.getElementById('app-root').addEventListener('input', (e) => {
       if (e.target.tagName === 'INPUT' && e.target.type === 'number') {
         const parts = e.target.id.split('_'); // e.g., input_w1_0_0_0_w
@@ -323,7 +350,7 @@
 
     // --- RENDERING UI ---
     function renderApp() {
-      if (!currentUser || !localData) return;
+      if ((!currentUser && isFirebaseConfigured) || !localData) return;
       
       const root = document.getElementById('app-root');
       updateHeaderSaveState();
@@ -430,7 +457,11 @@
       }
 
       html += `</div>`; // End space-y-4
-      root.innerHTML = html;
+      
+      // Preserve the warning message if it exists
+      const warningHtml = document.getElementById('firebase-warning') ? document.getElementById('firebase-warning').outerHTML : '';
+      root.innerHTML = warningHtml + html;
+      
       lucide.createIcons();
     }
   </script>
