@@ -76,6 +76,10 @@
 
     let app, auth, db;
     let isFirebaseConfigured = false;
+    
+    // Keep track of charts to destroy old ones if data updates
+    // Moved to the top to prevent initialization ReferenceErrors
+    const chartInstances = {};
 
     if (firebaseConfig && firebaseConfig.apiKey) {
       app = initializeApp(firebaseConfig);
@@ -161,9 +165,6 @@
       createChart('legPressChart', 'Leg Press (kg)', labels, legPressData, 'rgb(16, 185, 129)');
       createChart('shoulderPressChart', 'Shoulder Press (kg)', labels, shoulderPressData, 'rgb(245, 158, 11)');
     }
-
-    // Keep track of charts to destroy old ones if data updates (Firebase real-time sync)
-    const chartInstances = {};
 
     function createChart(canvasId, label, labels, dataPoints, color) {
       const ctx = document.getElementById(canvasId).getContext('2d');
