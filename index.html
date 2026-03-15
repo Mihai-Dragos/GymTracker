@@ -24,6 +24,10 @@
 
   <!-- Main Content -->
   <main id="app-root" class="max-w-3xl mx-auto p-4 md:mt-4">
+    <div id="firebase-warning" class="hidden bg-yellow-100 border-l-4 border-yellow-500 text-yellow-700 p-4 mb-4 rounded-md shadow-sm" role="alert">
+      <p class="font-bold text-sm">Cloud Saving Disabled</p>
+      <p class="text-xs mt-1">You are running outside the Canvas without a Firebase API key. Your data will only be saved temporarily during this session. To enable saving, update the `fallbackConfig` inside the code with your Firebase credentials.</p>
+    </div>
     <div class="flex items-center justify-center h-64">
       <div class="animate-pulse flex flex-col items-center">
         <i data-lucide="activity" class="w-12 h-12 text-blue-500 mb-4"></i>
@@ -38,11 +42,27 @@
     import { getFirestore, collection, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     // --- FIREBASE INITIALIZATION ---
-    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-    const app = initializeApp(firebaseConfig);
-    const auth = getAuth(app);
-    const db = getFirestore(app);
+    // If you host this on GitHub pages, add your Firebase keys here
+    const fallbackConfig = {
+      apiKey: "",
+      authDomain: "",
+      projectId: "",
+      storageBucket: "",
+      messagingSenderId: "",
+      appId: ""
+    };
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : fallbackConfig;
     const appId = typeof __app_id !== 'undefined' ? __app_id : 'basic-fit-tracker';
+
+    let app, auth, db;
+    let isFirebaseConfigured = false;
+
+    if (firebaseConfig && firebaseConfig.apiKey) {
+      app = initializeApp(firebaseConfig);
+      auth = getAuth(app);
+      db = getFirestore(app);
+      isFirebaseConfigured = true;
+    }
 
     // --- STATE VARIABLES ---
     let currentUser = null;
@@ -145,6 +165,12 @@
 
     // --- AUTHENTICATION ---
     async function initAuth() {
+      if (!isFirebaseConfigured) {
+        document.getElementById('firebase-warning').classList.remove('hidden');
+        setupMemoryOnlyMode();
+        return;
+      }
+
       try {
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
@@ -156,18 +182,20 @@
       }
     }
 
-    onAuthStateChanged(auth, (user) => {
-      currentUser = user;
-      if (user) {
-        fetchData();
-      }
-    });
+    if (isFirebaseConfigured) {
+      onAuthStateChanged(auth, (user) => {
+        currentUser = user;
+        if (user) {
+          fetchData();
+        }
+      });
+    }
 
     initAuth();
 
     // --- DATA FETCHING ---
     function fetchData() {
-      if (!currentUser) return;
+      if (!currentUser || !isFirebaseConfigured) return;
       const weeksRef = collection(db, 'artifacts', appId, 'users', currentUser.uid, 'weeks');
       
       onSnapshot(weeksRef, (snapshot) => {
@@ -194,6 +222,15 @@
       });
     }
 
+    // --- MEMORY ONLY FALLBACK ---
+    function setupMemoryOnlyMode() {
+      isInitialLoad = false;
+      const today = new Date().toISOString().split('T')[0];
+      currentWeekId = today;
+      localData = getInitialTemplate(today);
+      renderApp();
+    }
+
     // --- SAVING LOGIC ---
     function updateHeaderSaveState() {
       const container = document.getElementById('save-state-container');
@@ -211,6 +248,16 @@
       saveTimer = setTimeout(async () => {
         isSaving = true;
         updateHeaderSaveState();
+        
+        if (!isFirebaseConfigured) {
+          // Fake saving delay for memory-only mode
+          setTimeout(() => {
+            isSaving = false;
+            updateHeaderSaveState();
+          }, 500);
+          return;
+        }
+
         try {
           const docRef = doc(db, 'artifacts', appId, 'users', currentUser.uid, 'weeks', currentWeekId);
           await setDoc(docRef, localData, { merge: true });
